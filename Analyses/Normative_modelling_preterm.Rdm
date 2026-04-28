@@ -1,0 +1,1198 @@
+---
+title: "Norm_Modelling_Preterm"
+author: "Van"
+date: "10/6/2021"
+output: htlm
+---
+##### Normative modelling analyses specific for the Geneva Preterm Cohort from 6 to 14 years of age. 
+
+######### Load packages
+```{r data, echo=TRUE}
+
+#Packages
+
+rm(list = ls()) # clear the workspace
+library(easypackages) # then we can do the rest in one go
+
+# get a list of all potentially useful packages
+list.of.packages <- c("Hmisc","ggplot2","caret","gplots","Rmisc","dplyr",
+                      "MatchIt","optmatch","data.table","plotrix","ggthemes",
+                      "viridis","coin","plyr","psytabs","RColorBrewer","boot",
+                      "msir","lmtest", "ggpubr","stats", "reshape2","xtable",
+                      "ez","apa","parallel", "jmuOutlier","Rtsne","fpc", "cluster",
+                      "RCurl","nlme","foreach","doParallel", "gridExtra","cowplot","rtf",
+                      "mokken","psytabs","MKinfer","variancePartition","dplyr","plyr","tableone")
+
+# check if they are already installed and otherwise install them
+new.packages <- list.of.packages[!(list.of.packages %in% installed.packages()[,"Package"])]
+if(length(new.packages)>0) { install.packages(new.packages)}
+
+# then load them all
+libraries(list.of.packages)
+rm(list.of.packages, new.packages)
+```
+
+###################### Load Data & organise data
+```{r data, echo=TRUE}
+#Data Pre
+data_base <-read.csv("/Users/prepare/Dropbox/2021.02_CCpreterm/01.Data/CC_Data.csv",            
+                header = TRUE,             #are there column names in 1st row?
+                sep = ",",                 #what separates rows?
+                na.string = "NA",
+                stringsAsFactors = F)  
+
+#Data DTI
+dti <-read.csv("/Users/prepare/Dropbox/2021.02_CCpreterm/01.Data/05.TractSeg_DTI/dti.csv",            
+                header = TRUE,             #are there column names in 1st row?
+                sep = ",",                 #what separates rows?
+                na.string = "NA",
+                stringsAsFactors = F)  
+
+#Data NODDI
+nod <-read.csv("/Users/prepare/Dropbox/2021.02_CCpreterm/01.Data/03.TractSeg_Noddi/Noddi_All.csv",            
+                header = TRUE,             #are there column names in 1st row?
+                sep = ",",                 #what separates rows?
+                na.string = "NA",
+                stringsAsFactors = F)  
+
+# merge two data frames by ID
+temp <- merge(data_base,dti,by = "ID")
+data <- merge(temp,nod,by = "ID")
+
+data$Groups <- factor(data$Groups, levels = c(1,2), labels = c("PT","FT"))
+data$Cohort <- as.factor(data$Cohort)
+
+
+#Volume corrected for wb WM (Nosarti & al., 2014)
+data$wmcorrected_CC_Posterior <- (data$CC_Posterior / data$CerebralWhiteMatterVol)
+data$wmcorrected_CC_Mid_Posterior <- (data$CC_Mid_Posterior / data$CerebralWhiteMatterVol)
+data$wmcorrected_CC_Central <- (data$CC_Central / data$CerebralWhiteMatterVol)
+data$wmcorrected_CC_Mid_Anterior <- (data$CC_Mid_Anterior / data$CerebralWhiteMatterVol)
+data$wmcorrected_CC_Anterior <- (data$CC_Anterior / data$CerebralWhiteMatterVol)
+
+```
+
+###################### Sample Characteristics
+```{r data, echo=TRUE}
+#Remove 507_mind_c (GA = 35)
+data <- data[data$ID != "507_mind_c", ] 
+
+#Define variable to include
+data$Sexe <- factor(data$Sexe, levels=c(0,1), labels=c("Male","Female"))
+data$Cohort <- factor(data$Cohort)
+#Create a variable list which we want in Table 1
+listVars <- c("Cohort","Groups","AG_inWeeks","Pds_N","Pre_Age", "Sexe", "SES_largo", "GeneralCognFunct")
+#Define categorical variables
+catVars <- c("Groups","Cohort","Sexe")
+
+table1 <- CreateTableOne(listVars, data, catVars, strata = c("Groups"))
+table1
+
+#Group comparison
+chisq.test(data$Sexe, data$Group, correct=FALSE)
+t.test(data$AG_inWeeks~data$Group)
+t.test(data$Pds_N~data$Group)
+t.test(data$Pre_Age~data$Group)
+t.test(data$SES_largo~data$Group, )
+
+```
+
+###################### All measures - Local Regression
+```{r data, echo=TRUE}
+setwd("/Users/prepare/Dropbox/2021.02_CCpreterm/02.CodeR/NormativeModelling_MindVaV/")
+# load the two functions to get the SD and LOESS coeffient
+source("_calcSD.R")
+source("_calcLOESS.R")
+
+# select the columns that we want to compute z-scores on
+vol <- data[c("CC_Anterior","CC_Mid_Anterior","CC_Central","CC_Mid_Posterior","CC_Posterior","wmcorrected_CC_Anterior","wmcorrected_CC_Mid_Anterior","wmcorrected_CC_Central","wmcorrected_CC_Mid_Posterior","wmcorrected_CC_Posterior","FA_CC_1","FA_CC_2","FA_CC_3","FA_CC_4","FA_CC_5","FA_CC_6","FA_CC_7","ADC_CC_1","ADC_CC_2","ADC_CC_3","ADC_CC_4","ADC_CC_5","ADC_CC_6","ADC_CC_7","ODI_CC_1",	"ODI_CC_2",	"ODI_CC_3",	"ODI_CC_4",	"ODI_CC_5",	"ODI_CC_6",	"ODI_CC_7",	"FICVF_CC_1",	"FICVF_CC_2",	"FICVF_CC_3",	"FICVF_CC_4",	"FICVF_CC_5",	"FICVF_CC_6",	"FICVF_CC_7",	"FISO_CC_1",	"FISO_CC_2",	"FISO_CC_3",	"FISO_CC_4",	"FISO_CC_5",	"FISO_CC_6",	"FISO_CC_7")]
+volname <- data.frame(colnames(vol))
+columnnames <- (volname$colnames.vol.)
+
+#Count number of NA
+row.has.na <- apply(vol, 1, function(x){any(is.na(x))})
+sum(row.has.na)
+
+# order the data by age
+data_age <- data[order(data$Pre_Age),]
+
+# split the data into equal size age bins so that we can allign the data later and do some subsetting
+# split into 2 years (24 monts) > no FT between 167-173 months
+# total months = 102
+# division of age 102/4= 25.5 > Age range = 72 to 173
+# division of age 102/3= 34 
+
+agerange <- seq(71, 173, 25.5)
+data_age$agebins <- cut(data_age$Pre_Age, agerange)
+data_age$numbins <- as.numeric(data_age$agebins)
+
+ddply(data_age,~Groups+agebins,summarise, freq=length(Groups))
+
+# Control vs Preterm data
+data_age.PT <- subset(data_age, Groups == "PT")
+data_age.FT <- subset(data_age, Groups == "FT")
+
+print("Calculating W-Scores")
+# now in a loop compute the scores for all males
+for (i in unique(columnnames)) {
+  print(paste("working on:",i))
+  # get the normative scores for that columns 
+  normativeScores <- calcLOESS(data_age.FT[,i],data_age.FT$Pre_Age)
+
+  ctltest <- data.frame(agebins = data_age.FT$agebins, normativeScores)
+
+  # need to check for bins that only have one value as they won't provide a standard deviation
+  test <- summarySE(ctltest, measurevar = "Mu", groupvars = "agebins")
+  test <- subset(test, N > 2)
+
+  normative <- ctltest %>% group_by(agebins) %>% summarise_all(mean)
+  colnames(normative) <- c("agebins",paste(i,"_mu",sep = ""),paste(i,"_sd",sep = ""))
+
+  keepBins <- match(test$agebins, normative$agebins)
+  normative <- normative[keepBins,]
+  # in the ASD data compute a z-score for FIQ based on the normative data.
+  # first add the normative data to the ASD data
+  data_age.PT <- merge(data_age.PT,normative, by = "agebins")
+  # then compute the z-score
+  name1 <- paste(i,"_mu",sep = "")
+  name2 <- paste(i,"_sd",sep = "")
+  name3 <- paste(i,"_z",sep = "")
+
+  data_age.PT[,name3] <- ((data_age.PT[,i]-data_age.PT[,name1])/data_age.PT[,name2])
+  data_age.PT[,name1] <- NULL
+  data_age.PT[,name2] <- NULL
+
+  # add the normative scores to the original as well
+  colnames(normativeScores) <- c(name1, name2)
+  data_age.FT[,name1] <- normativeScores[,name1]
+  data_age.FT[,name2] <- normativeScores[,name2]
+  data_age.FT[,name3] <- ((data_age.FT[,i]-data_age.FT[,name1])/data_age.FT[,name2])
+}
+
+data_age <- rbind.fill(data_age.PT, data_age.FT)
+rm(data_age.PT, data_age.FT)
+
+#Create atypical categories
+for (i in unique(columnnames)){
+  name1 <- paste(i,"_mu",sep = "")
+  name2 <- paste(i,"_sd",sep = "")
+  name3 <- paste(i,"_z",sep = "")
+  name4 <- paste(i,"_atypic",sep = "")
+ 
+data_age[,name4] <- data_age[,name3]
+x <- data_age[,name3]
+x[ x > 2 ] <- 5
+x[ x < -2 ] <- 6
+x[ x < 2 ] <- 7
+
+data_age[,name4] <- x
+data_age[,name4] <- factor(data_age[,name4], levels = c(5,6,7), labels = c("Above","Below","Norm"))
+}
+
+save(data_age,volname,file = paste("Wscores_PUBLI.RData",sep=""))
+rm(i, name1, name2, name3, normativeScores, normative, ctltest)
+
+
+## now create some plots of the above
+regions <- columnnames
+# plot all curves per region per group
+pcol <- viridis(2)
+Vol <- melt(data_age, id.vars = c("Groups","Pre_Age"), measure.vars = regions)
+colnames(Vol) <- c("Group","Age","Region","Value")
+
+plots <- list()
+for(i in unique(Vol$Region)){
+  Voltemp <- subset(Vol, Region == i)
+  print(paste("working on:",i))
+
+plots[[i]] <- ggplot(Voltemp, aes(x=Age, y=Value, fill = Group)) + # make basic plot
+  geom_point(aes(colour = Group), size = 3, alpha = 0.7) + # add scatterplot
+  geom_smooth(method=loess,span = 0.4,   # Add local regression line
+              se=TRUE) +  # Add shaded confidence region
+              scale_color_manual(values=pcol) +
+              scale_fill_manual(values=pcol) +
+  theme_minimal() +
+  ggtitle(paste("Region:",i)) +
+  theme(text = element_text(size = 18),
+        plot.background = element_rect(fill="white"),
+        panel.background = element_rect(fill="white"),
+        axis.text.y = element_text(color="black", size=rel(1)),
+        axis.text.x = element_text(color="black", size=rel(1)),
+        axis.title.x = element_text(color="black", size=rel(1)),
+        axis.title.y = element_text(color="black", size=rel(1)),
+        panel.grid.minor.x = element_blank(),
+        panel.grid.major.x = element_blank(),
+        legend.title = element_blank(),
+        legend.text = element_text(color="black", size=rel(0.7)),
+        legend.background = element_rect(fill="white"),
+        legend.position = "bottom",
+        plot.title = element_text(color="black",hjust = 0.5))
+}
+
+#Save Plots
+print("Printing local regression plots")
+
+pdf(paste("SmoothedCurves.pdf",sep=""), onefile = TRUE, paper = "a4r")
+for (i in seq(length(plots))) {
+   print(plots[[i]])
+ }
+ dev.off()
+rm(pcol,plots,i,Vol,Voltemp)
+
+# plot z-scores for PT group
+zregions <- sapply(columnnames, function(x) paste(x, "_z", sep=""))
+PT <- subset(data_age, Groups == "PT")
+zVol <- melt(PT, id.vars = c("Pre_Age"), measure.vars = zregions)
+colnames(zVol) <- c("Age","Region","ZScore")
+pcol <- viridis(1)
+
+plots <- list()
+for(i in unique(zVol$Region)){
+  zVoltemp <- subset(zVol, Region == i)
+  print(paste("working on:",i))
+
+plots[[i]] <- ggplot(zVoltemp, aes(x=Age, y=ZScore)) + # make basic plot
+  geom_point(colour = "white", fill = pcol,
+             stroke = 1.5,pch = 21, size = 3,shape = 16, alpha = 0.6) + # add scatterplot
+  geom_smooth(method=loess,span = 0.4,   # Add local regression line
+              se=TRUE) +  # Add shaded confidence region
+              theme_minimal() +
+              ggtitle(paste("Region:",i)) +
+              theme(text = element_text(size = 18),
+                    plot.background = element_rect(fill="white"),
+                    panel.background = element_rect(fill="white"),
+                    axis.text.y = element_text(color="black", size=rel(1)),
+                    axis.text.x = element_text(color="black", size=rel(1)),
+                    axis.title.x = element_text(color="black", size=rel(1)),
+                    axis.title.y = element_text(color="black", size=rel(1)),
+                    panel.grid.minor.x = element_blank(),
+                    panel.grid.major.x = element_blank(),
+                    legend.title = element_blank(),
+                    legend.text = element_text(color="black", size=rel(0.7)),
+                    legend.background = element_rect(fill="white"),
+                    legend.position = "bottom",
+                    plot.title = element_text(color="black",hjust = 0.5))}
+
+#Save as PDF
+print("Printing z-score plots")
+ pdf(paste("PT_Wscores.pdf",sep=""), onefile = TRUE, paper = "a4r")
+for (i in seq(length(plots))) {
+   print(plots[[i]])
+ }
+ dev.off()
+ rm(zregions,zVol,plots,i,zVoltemp, pcol)
+ 
+
+```
+
+############################# Significant group difference in SES
+```{r data, echo=TRUE}
+
+setwd("/Users/prepare/Dropbox/2021.02_CCpreterm/02.CodeR/NormativeModelling_MindVaV/")
+source("_corstars.R")
+
+var<- data_age[c("SES_largo","GeneralCognFunct","Pre_RT_mean_Incong_flanker","Pre_RT_mean_Cong_flanker","Pre_NB_NEPSY_TE_ToTal","Pre_NB_NEPSY_AR","Pre_NS_NEPSY_AR","Pre_NB_Wisc_V_Mem_leTTre_chiff","Pre_NS_Wisc_V_Mem_leTTre_chif","Pre_NB_SDQ_ToTal","Pre_NS_BRIEF_CEG","Pre_NS_BRIEF_IM","Pre_NS_BRIEF_IRC","flanker_inhib_RT","flanker_inhib_ACC","flanker_inhib_RT_Aadj","flanker_inhib_ACC_Aadj","flanker_Cong_RT_Aadj","TOM_Aadj","AR_Aadj","SLC_Aadj","CC_Anterior","CC_Mid_Anterior","CC_Central","CC_Mid_Posterior","CC_Posterior","wmcorrected_CC_Anterior","wmcorrected_CC_Mid_Anterior","wmcorrected_CC_Central","wmcorrected_CC_Mid_Posterior","wmcorrected_CC_Posterior","FA_CC_1","FA_CC_2","FA_CC_3","FA_CC_4","FA_CC_5","FA_CC_6","FA_CC_7","ADC_CC_1","ADC_CC_2","ADC_CC_3","ADC_CC_4","ADC_CC_5","ADC_CC_6","ADC_CC_7","ODI_CC_1",	"ODI_CC_2",	"ODI_CC_3",	"ODI_CC_4",	"ODI_CC_5",	"ODI_CC_6",	"ODI_CC_7",	"FICVF_CC_1",	"FICVF_CC_2",	"FICVF_CC_3",	"FICVF_CC_4",	"FICVF_CC_5",	"FICVF_CC_6",	"FICVF_CC_7",	"FISO_CC_1",	"FISO_CC_2",	"FISO_CC_3",	"FISO_CC_4",	"FISO_CC_5",	"FISO_CC_6",	"FISO_CC_7")]
+
+# Corr matrix table
+library("xtable")
+library("xlsx")
+table <- corstars(var)
+write.xlsx(table, "CorrelationTable_SES.xlsx") 
+
+### In FT
+FT <- subset(data_age, Groups == "FT")
+var<- FT[c("SES_largo","GeneralCognFunct","Pre_RT_mean_Incong_flanker","Pre_RT_mean_Cong_flanker","Pre_NB_NEPSY_TE_ToTal","Pre_NB_NEPSY_AR","Pre_NS_NEPSY_AR","Pre_NB_Wisc_V_Mem_leTTre_chiff","Pre_NS_Wisc_V_Mem_leTTre_chif","Pre_NB_SDQ_ToTal","Pre_NS_BRIEF_CEG","Pre_NS_BRIEF_IM","Pre_NS_BRIEF_IRC","flanker_inhib_RT","flanker_inhib_ACC","flanker_inhib_RT_Aadj","flanker_inhib_ACC_Aadj","flanker_Cong_RT_Aadj","TOM_Aadj","AR_Aadj","SLC_Aadj","CC_Anterior","CC_Mid_Anterior","CC_Central","CC_Mid_Posterior","CC_Posterior","wmcorrected_CC_Anterior","wmcorrected_CC_Mid_Anterior","wmcorrected_CC_Central","wmcorrected_CC_Mid_Posterior","wmcorrected_CC_Posterior","FA_CC_1","FA_CC_2","FA_CC_3","FA_CC_4","FA_CC_5","FA_CC_6","FA_CC_7","ADC_CC_1","ADC_CC_2","ADC_CC_3","ADC_CC_4","ADC_CC_5","ADC_CC_6","ADC_CC_7","ODI_CC_1",	"ODI_CC_2",	"ODI_CC_3",	"ODI_CC_4",	"ODI_CC_5",	"ODI_CC_6",	"ODI_CC_7",	"FICVF_CC_1",	"FICVF_CC_2",	"FICVF_CC_3",	"FICVF_CC_4",	"FICVF_CC_5",	"FICVF_CC_6",	"FICVF_CC_7",	"FISO_CC_1",	"FISO_CC_2",	"FISO_CC_3",	"FISO_CC_4",	"FISO_CC_5",	"FISO_CC_6",	"FISO_CC_7")]
+
+# Corr matrix table
+library("xtable")
+library("xlsx")
+table <- corstars(var)
+write.xlsx(table, "CorrelationTable_SES_Controls.xlsx") 
+
+### In VPT
+PT <- subset(data_age, Groups == "PT")
+var<- PT[c("SES_largo","GeneralCognFunct","Pre_RT_mean_Incong_flanker","Pre_RT_mean_Cong_flanker","Pre_NB_NEPSY_TE_ToTal","Pre_NB_NEPSY_AR","Pre_NS_NEPSY_AR","Pre_NB_Wisc_V_Mem_leTTre_chiff","Pre_NS_Wisc_V_Mem_leTTre_chif","Pre_NB_SDQ_ToTal","Pre_NS_BRIEF_CEG","Pre_NS_BRIEF_IM","Pre_NS_BRIEF_IRC","flanker_inhib_RT","flanker_inhib_ACC","flanker_inhib_RT_Aadj","flanker_inhib_ACC_Aadj","flanker_Cong_RT_Aadj","TOM_Aadj","AR_Aadj","SLC_Aadj","CC_Anterior","CC_Mid_Anterior","CC_Central","CC_Mid_Posterior","CC_Posterior","wmcorrected_CC_Anterior","wmcorrected_CC_Mid_Anterior","wmcorrected_CC_Central","wmcorrected_CC_Mid_Posterior","wmcorrected_CC_Posterior","FA_CC_1","FA_CC_2","FA_CC_3","FA_CC_4","FA_CC_5","FA_CC_6","FA_CC_7","ADC_CC_1","ADC_CC_2","ADC_CC_3","ADC_CC_4","ADC_CC_5","ADC_CC_6","ADC_CC_7","ODI_CC_1",	"ODI_CC_2",	"ODI_CC_3",	"ODI_CC_4",	"ODI_CC_5",	"ODI_CC_6",	"ODI_CC_7",	"FICVF_CC_1",	"FICVF_CC_2",	"FICVF_CC_3",	"FICVF_CC_4",	"FICVF_CC_5",	"FICVF_CC_6",	"FICVF_CC_7",	"FISO_CC_1",	"FISO_CC_2",	"FISO_CC_3",	"FISO_CC_4",	"FISO_CC_5",	"FISO_CC_6",	"FISO_CC_7")]
+
+# Corr matrix table
+library("xtable")
+library("xlsx")
+table <- corstars(var)
+write.xlsx(table, "CorrelationTable_SES_VPT.xlsx") 
+
+```
+
+ ############################# Remove missing values for PLSC
+```{r data, echo=TRUE}
+
+setwd("/Users/prepare/Dropbox/2021.02_CCpreterm/02.CodeR/NormativeModelling_MindVaV/")
+#load("~/Dropbox/2021.02_CCpreterm/02.CodeR/NormativeModelling_MindVaV/Wscores_PUBLI.RData")
+
+#### Keep original version of data_age
+
+original.data_age <- data_age
+
+#### Remove NA from data
+#1. Add mean of the group for a few subject
+#04_vav_p, 038_vav_p, 08_vav_p: to avoid missing values, T1 scores for flanker were attributed to PRE (t2) data (wait group)
+
+#3. Add mean of the agebin-subgroup instead of NA
+
+which(is.na(data_age$SES_largo)) #49 (96.5,122], 71 (71,96.5]
+which( colnames(data_age)=="SES_largo") #7
+ddply(data_age,~Groups+agebins,summarise,mean=mean(SES_largo, na.rm = TRUE),sd=sd(SES_largo, na.rm = TRUE))
+data_age[49,7] = 5.125000
+data_age[71,7] = 4.133333
+
+
+which(is.na(data_age$GeneralCognFunct)) #58: (96.5,122]
+which( colnames(data_age)=="GeneralCognFunct") #323
+ddply(data_age,~Groups+agebins,summarise,mean=mean(GeneralCognFunct, na.rm = TRUE),sd=sd(GeneralCognFunct, na.rm = TRUE))
+data_age[58,323] = 104.8125
+
+which(is.na(data_age$Pre_RT_mean_Incong_flanker)) # 17 (122,148], 37 (71,96.5], 38 (71,96.5], 39 (71,96.5], 40 (71,96.5], 41 (71,96.5], 54 (96.5,122], 57 (96.5,122], 60 (96.5,122]
+which(is.na(data_age$Pre_RT_mean_Cong_flanker)) 
+
+which( colnames(data_age)=="Pre_RT_mean_Incong_flanker" )#203
+ddply(data_age,~Groups+agebins,summarise,mean=mean(Pre_RT_mean_Incong_flanker,na.rm=TRUE),sd=sd(Pre_RT_mean_Incong_flanker,na.rm=TRUE))
+
+data_age[17,203] = 1015.872
+data_age[37,203] =1517.713
+data_age[38,203] =1517.713
+data_age[39,203] =1517.713
+data_age[40,203] =1517.713
+data_age[41,203] =1517.713
+data_age[54,203] =1245.549 
+data_age[57,203] =1245.549 
+data_age[60,203] =1245.549
+  
+which( colnames(data_age)=="Pre_RT_mean_Cong_flanker" )#202
+ddply(data_age,~Groups+agebins,summarise,mean=mean(Pre_RT_mean_Cong_flanker,na.rm=TRUE),sd=sd(Pre_RT_mean_Cong_flanker,na.rm=TRUE))
+
+data_age[17,202] =973.0921
+data_age[37,202] =1468.3750
+data_age[38,202] =1468.3750
+data_age[39,202] =1468.3750
+data_age[40,202] =1468.3750
+data_age[41,202] =1468.3750
+data_age[54,202] =1467.0763
+data_age[57,202] =1467.0763
+data_age[60,202] =1467.0763
+ 
+# For accuracy 0 are missing values !  
+data_age$Pre_ACC_Sum_Cong_flanker[data_age$Pre_ACC_Sum_Cong_flanker == 0] <- NA
+data_age$Pre_ACC_Sum_Incong_flanker[data_age$Pre_ACC_Sum_Incong_flanker == 0] <- NA
+
+which(is.na(data_age$Pre_ACC_Sum_Incong_flanker)) # 17 37 38 39 40 41 54 55 57 60
+which(is.na(data_age$Pre_ACC_Sum_Cong_flanker)) 
+# 17 (122,148], 37 (71,96.5], 38 (71,96.5], 39 (71,96.5], 40 (71,96.5], 41 (71,96.5], 54 (96.5,122], 55 (96.5,122], 57 (96.5,122], 60 (96.5,122]
+
+which( colnames(data_age)=="Pre_ACC_Sum_Incong_flanker" )#196
+ddply(data_age,~Groups+agebins,summarise,mean=mean(Pre_ACC_Sum_Incong_flanker,na.rm=TRUE),sd=sd(Pre_ACC_Sum_Incong_flanker,na.rm=TRUE))
+
+data_age[17,196] = 14.84211
+data_age[37,196] = 13.30000
+data_age[38,196] =13.30000
+data_age[39,196] =13.30000
+data_age[40,196] =13.30000
+data_age[41,196] =13.30000
+data_age[54,196] =15.53846
+data_age[55,196] =15.53846
+data_age[57,196] =15.53846
+data_age[60,196] =15.53846
+
+which( colnames(data_age)=="Pre_ACC_Sum_Cong_flanker" )#195
+ddply(data_age,~Groups+agebins,summarise,mean=mean(Pre_ACC_Sum_Cong_flanker,na.rm=TRUE),sd=sd(Pre_ACC_Sum_Cong_flanker,na.rm=TRUE))
+
+data_age[17,195] = 15.15789 
+data_age[37,195] = 14.80000
+data_age[38,195] =14.80000
+data_age[39,195] =14.80000
+data_age[40,195] =14.80000
+data_age[41,195] =14.80000
+data_age[54,195] =15.46154
+data_age[55,195] =15.46154
+data_age[57,195] =15.46154
+data_age[60,195] =15.46154
+
+which(is.na(data_age$Pre_NB_NEPSY_TE_ToTal)) # 41: (71,96.5];  93: FT (122,148]
+which( colnames(data_age)=="Pre_NB_NEPSY_TE_ToTal" )# 165
+ddply(data_age,~Groups+agebins,summarise,mean=mean(Pre_NB_NEPSY_TE_ToTal,na.rm=TRUE),sd=sd(Pre_NB_NEPSY_TE_ToTal,na.rm=TRUE))
+
+data_age[41,165] = 20.14286
+data_age[93,165] =  24.28571
+
+
+which(is.na(data_age$Pre_NB_NEPSY_AR)) # 93
+which( colnames(data_age)=="Pre_NB_NEPSY_AR" )# 161
+ddply(data_age,~Groups+agebins,summarise,mean=mean(Pre_NB_NEPSY_AR,na.rm=TRUE),sd=sd(Pre_NB_NEPSY_AR,na.rm=TRUE))
+
+data_age[93,161] =  27.92857
+
+which(is.na(data_age$Pre_NS_NEPSY_AR)) # 93
+which( colnames(data_age)=="Pre_NS_NEPSY_AR" )# 162
+ddply(data_age,~Groups+agebins,summarise,mean=mean(Pre_NS_NEPSY_AR,na.rm=TRUE),sd=sd(Pre_NS_NEPSY_AR,na.rm=TRUE))
+
+data_age[93,162] = 11.071429
+
+which(is.na(data_age$Pre_NB_Wisc_V_Mem_leTTre_chiff)) # 93
+which( colnames(data_age)=="Pre_NB_Wisc_V_Mem_leTTre_chiff" )# 159
+ddply(data_age,~Groups+agebins,summarise,mean=mean(Pre_NB_Wisc_V_Mem_leTTre_chiff,na.rm=TRUE),sd=sd(Pre_NB_Wisc_V_Mem_leTTre_chiff,na.rm=TRUE))
+
+data_age[93,159] = 17.85714
+
+which(is.na(data_age$Pre_NS_Wisc_V_Mem_leTTre_chif)) # 93
+which( colnames(data_age)=="Pre_NS_Wisc_V_Mem_leTTre_chif" )# 160
+ddply(data_age,~Groups+agebins,summarise,mean=mean(Pre_NS_Wisc_V_Mem_leTTre_chif,na.rm=TRUE),sd=sd(Pre_NS_Wisc_V_Mem_leTTre_chif,na.rm=TRUE))
+
+data_age[93,160] = 10.71429
+
+which(is.na(data_age$Pre_NB_SDQ_ToTal)) # 93 94
+which( colnames(data_age)=="Pre_NB_SDQ_ToTal" )# 152
+ddply(data_age,~Groups+agebins,summarise,mean=mean(Pre_NB_SDQ_ToTal,na.rm=TRUE),sd=sd(Pre_NB_SDQ_ToTal,na.rm=TRUE))
+
+data_age[93,152] = 7.923077
+data_age[94,152] = 7.923077
+
+
+which(is.na(data_age$Pre_NS_BRIEF_CEG)) # 93 94
+which( colnames(data_age)=="Pre_NS_BRIEF_CEG" )# 128
+ddply(data_age,~Groups+agebins,summarise,mean=mean(Pre_NS_BRIEF_CEG,na.rm=TRUE),sd=sd(Pre_NS_BRIEF_CEG,na.rm=TRUE))
+
+data_age[93,128] =48.69231
+data_age[94,128] = 48.69231
+
+which(is.na(data_age$Pre_NS_BRIEF_IM)) # 93 94
+which( colnames(data_age)=="Pre_NS_BRIEF_IM" )# 126
+ddply(data_age,~Groups+agebins,summarise,mean=mean(Pre_NS_BRIEF_IM,na.rm=TRUE),sd=sd(Pre_NS_BRIEF_IM,na.rm=TRUE))
+
+data_age[93,126] =  50.53846
+data_age[94,126] =  50.53846
+
+which(is.na(data_age$Pre_NS_BRIEF_IRC)) # 93 94
+which( colnames(data_age)=="Pre_NS_BRIEF_IRC" )# 124
+ddply(data_age,~Groups+agebins,summarise,mean=mean(Pre_NS_BRIEF_IRC,na.rm=TRUE),sd=sd(Pre_NS_BRIEF_IRC,na.rm=TRUE))
+
+data_age[93,124] =  48.84615
+data_age[94,124] =  48.84615
+
+                   
+```
+
+ ############################# Create all scores for PLSC
+```{r data, echo=TRUE}
+
+### Inhibition scores
+# A. Inhibition score calculation
+data_age$flanker_inhib_RT <- (data_age$Pre_RT_mean_Incong_flanker - data_age$Pre_RT_mean_Cong_flanker)
+
+# B. Inhibition ACC score calculation
+data_age$flanker_inhib_ACC <- (data_age$Pre_ACC_Sum_Incong_flanker - data_age$Pre_ACC_Sum_Cong_flanker)
+
+# Age-adjusted
+data_age$flanker_inhib_RT_Aadj <- rstandard(lm (data_age$flanker_inhib_RT ~ Pre_Age, data= data_age, na.action="na.exclude"))
+data_age$flanker_inhib_ACC_Aadj <- rstandard(lm (data_age$flanker_inhib_ACC ~ Pre_Age, data= data_age, na.action="na.exclude"))
+data_age$flanker_Cong_RT_Aadj <- rstandard(lm (Pre_RT_mean_Cong_flanker ~ Pre_Age, data= data_age, na.action="na.exclude"))
+data_age$TOM_Aadj <- rstandard(lm (Pre_NB_NEPSY_TE_ToTal ~ Pre_Age, data= data_age, na.action="na.exclude"))
+data_age$AR_Aadj <- rstandard(lm (Pre_NB_NEPSY_AR ~ Pre_Age, data= data_age, na.action="na.exclude"))
+data_age$SLC_Aadj <- rstandard(lm (Pre_NB_Wisc_V_Mem_leTTre_chiff ~ Pre_Age, data= data_age, na.action="na.exclude"))
+
+# Age & SES-adjusted
+data_age$flanker_inhib_RT_SAadj <- rstandard(lm (data_age$flanker_inhib_RT ~ Pre_Age+ SES_largo, data= data_age, na.action="na.exclude"))
+data_age$flanker_inhib_ACC_SAadj <- rstandard(lm (data_age$flanker_inhib_ACC ~ Pre_Age+ SES_largo, data= data_age, na.action="na.exclude"))
+data_age$flanker_Cong_RT_SAadj <- rstandard(lm (Pre_RT_mean_Cong_flanker ~ Pre_Age+ SES_largo, data= data_age, na.action="na.exclude"))
+data_age$TOM_SAadj <- rstandard(lm (Pre_NB_NEPSY_TE_ToTal ~ Pre_Age+ SES_largo, data= data_age, na.action="na.exclude"))
+data_age$AR_SAadj <- rstandard(lm (Pre_NB_NEPSY_AR ~ Pre_Age+ SES_largo, data= data_age, na.action="na.exclude"))
+data_age$SLC_SAadj <- rstandard(lm (Pre_NB_Wisc_V_Mem_leTTre_chiff ~ Pre_Age+ SES_largo, data= data_age, na.action="na.exclude"))
+
+# SES-adjusted
+data_age$AR_NS_Sadj <- rstandard(lm (Pre_NS_NEPSY_AR ~ SES_largo, data= data_age, na.action="na.exclude"))
+data_age$SLC_NS_Sadj<- rstandard(lm (Pre_NS_Wisc_V_Mem_leTTre_chif ~ SES_largo, data= data_age, na.action="na.exclude"))
+data_age$GeneralCognFunct_Sadj <- rstandard(lm (GeneralCognFunct ~ SES_largo, data= data_age, na.action="na.exclude"))
+
+### Zscore birth weight - get mean+SD
+data_age.FT <- subset(data_age, Groups == "FT")
+ddply(data_age.FT,~Sexe,summarise,mean=mean(Pds_N, na.rm = TRUE),sd=sd(Pds_N, na.rm = TRUE))
+
+```
+
+ ############################# Export for PLSC
+```{r data, echo=TRUE}
+
+#---------------------------------------------
+######################## Export Raw score 2 groups
+#---------------------------------------------
+
+# select the columns 
+behav <-data_age[c("ID","Groups","agebins","SES_largo","AG_inWeeks","Pds_N","Pre_Age","GeneralCognFunct","Pre_RT_mean_Incong_flanker","Pre_RT_mean_Cong_flanker","Pre_NB_NEPSY_TE_ToTal","Pre_NB_NEPSY_AR","Pre_NS_NEPSY_AR","Pre_NB_Wisc_V_Mem_leTTre_chiff","Pre_NS_Wisc_V_Mem_leTTre_chif","Pre_NB_SDQ_ToTal","Pre_NS_BRIEF_CEG","Pre_NS_BRIEF_IM","Pre_NS_BRIEF_IRC","flanker_inhib_RT","flanker_inhib_ACC","flanker_inhib_RT_Aadj","flanker_inhib_ACC_Aadj","flanker_Cong_RT_Aadj","TOM_Aadj","AR_Aadj","SLC_Aadj","flanker_inhib_RT_SAadj","flanker_inhib_ACC_SAadj","flanker_Cong_RT_SAadj","TOM_SAadj","AR_SAadj","SLC_SAadj","AR_NS_Sadj","SLC_NS_Sadj","GeneralCognFunct_Sadj")]
+
+vol <- data_age[c("CC_Anterior","CC_Mid_Anterior","CC_Central","CC_Mid_Posterior","CC_Posterior","wmcorrected_CC_Anterior","wmcorrected_CC_Mid_Anterior","wmcorrected_CC_Central","wmcorrected_CC_Mid_Posterior","wmcorrected_CC_Posterior","FA_CC_1","FA_CC_2","FA_CC_3","FA_CC_4","FA_CC_5","FA_CC_6","FA_CC_7","ADC_CC_1","ADC_CC_2","ADC_CC_3","ADC_CC_4","ADC_CC_5","ADC_CC_6","ADC_CC_7","ODI_CC_1",	"ODI_CC_2",	"ODI_CC_3",	"ODI_CC_4",	"ODI_CC_5",	"ODI_CC_6",	"ODI_CC_7",	"FICVF_CC_1",	"FICVF_CC_2",	"FICVF_CC_3",	"FICVF_CC_4",	"FICVF_CC_5",	"FICVF_CC_6",	"FICVF_CC_7",	"FISO_CC_1",	"FISO_CC_2",	"FISO_CC_3",	"FISO_CC_4",	"FISO_CC_5",	"FISO_CC_6",	"FISO_CC_7")]
+
+pls <- cbind(behav,vol)
+
+#3. Check that all NA are removed
+pls2 <-na.omit(pls) 
+
+# Get variable names
+plsvar <- data.frame(colnames(pls))
+plsvar <- (plsvar$colnames.pls.)
+
+# create .cvs file for each column in pls
+for (i in unique(plsvar)){
+  name1 <- paste(i,sep = "")
+array <- pls[,name1]
+array<- data.frame(array) 
+
+write.table((array),                              
+ paste0( "/Users/prepare/Dropbox/2021.02_CCpreterm/01.Data/04.PLSmat/Raw_2groups/", name1,".csv"),
+ row.names=FALSE, col.names=FALSE)}
+
+#---------------------------------------------
+######################## Export Raw score VPT
+#---------------------------------------------
+# only PT
+VPT <- subset(pls, Groups == "PT")
+
+# Remove NA from data
+VPT <-na.omit(VPT) 
+# Get variable names
+plsvar <- data.frame(colnames(VPT))
+plsvar <- (plsvar$colnames.VPT.)
+
+# create .cvs file for each column in pls
+for (i in unique(plsvar)){
+  name1 <- paste(i,sep = "")
+array <- VPT[,name1]
+array<- data.frame(array) 
+
+write.table((array),                              
+ paste0( "/Users/prepare/Dropbox/2021.02_CCpreterm/01.Data/04.PLSmat/Raw_VPT/", name1,".csv"),
+ row.names=FALSE, col.names=FALSE)}
+
+#---------------------------------------------
+######################## Export Raw score CONTROLS
+#---------------------------------------------
+# only PT
+FT <- subset(pls, Groups == "FT")
+
+# Remove NA from data
+FT <-na.omit(FT) 
+# Get variable names
+plsvar <- data.frame(colnames(FT))
+plsvar <- (plsvar$colnames.FT.)
+
+# create .cvs file for each column in pls
+for (i in unique(plsvar)){
+  name1 <- paste(i,sep = "")
+array <- FT[,name1]
+array<- data.frame(array) 
+
+write.table((array),                              
+ paste0( "/Users/prepare/Dropbox/2021.02_CCpreterm/01.Data/04.PLSmat/Raw_FT/", name1,".csv"),
+ row.names=FALSE, col.names=FALSE)}
+
+#---------------------------------------------
+######################## Export Wscores 
+#---------------------------------------------
+
+vol.columnnames <- (volname$colnames.vol.)
+# Create new data
+vol <-data_age[c("ID")]
+# Add w score to the new dataframe
+for (i in unique(vol.columnnames)){
+name1 <- paste(i,"_z",sep = "")
+vol[,name1]<-data_age[,name1]}
+
+
+### 
+behav <-data_age[c("ID","Groups","agebins","AG_inWeeks","SES_largo","BW_zscore","Pds_N","Pre_Age","GeneralCognFunct","Pre_RT_mean_Incong_flanker","Pre_RT_mean_Cong_flanker","Pre_NB_NEPSY_TE_ToTal","Pre_NB_NEPSY_AR","Pre_NS_NEPSY_AR","Pre_NB_Wisc_V_Mem_leTTre_chiff","Pre_NS_Wisc_V_Mem_leTTre_chif","Pre_NB_SDQ_ToTal","Pre_NS_BRIEF_CEG","Pre_NS_BRIEF_IM","Pre_NS_BRIEF_IRC","flanker_inhib_RT","flanker_inhib_ACC","flanker_inhib_RT_Aadj","flanker_inhib_ACC_Aadj","flanker_Cong_RT_Aadj","TOM_Aadj","AR_Aadj","SLC_Aadj","flanker_inhib_RT_SAadj","flanker_inhib_ACC_SAadj","flanker_Cong_RT_SAadj","TOM_SAadj","AR_SAadj","SLC_SAadj","AR_NS_Sadj","SLC_NS_Sadj","GeneralCognFunct_Sadj")]
+
+# Merging data
+all_data <- merge(behav,vol,by = "ID")
+
+# only PT
+PT <- subset(all_data, Groups == "PT")
+
+#Inf value in ADC_CC_2_z
+PT$ ADC_CC_2_z[PT$ ADC_CC_2_z == "Inf"] <- 0.01
+PT$ ADC_CC_2_z[PT$ ADC_CC_2_z == "-Inf"] <- -0.01
+
+# Get variable names
+plsvar <- data.frame(colnames(PT))
+plsvar <- (plsvar$colnames.PT.)
+
+# create .cvs file for each column in pls
+for (i in unique(plsvar)){
+  name1 <- paste(i,sep = "")
+array <- PT[,name1]
+array<- data.frame(array) 
+
+write.table((array),                              
+ paste0( "/Users/prepare/Dropbox/2021.02_CCpreterm/01.Data/04.PLSmat/Wscores_VPT/", name1,".csv"),
+ row.names=FALSE, col.names=FALSE)}
+
+```
+
+
+################### W-score removing preterm out of age range & Export for ################## PLSC
+```{r data, echo=TRUE}
+
+#---------------------------------------------
+################### W-SCORES CREATION
+#---------------------------------------------
+
+setwd("/Users/prepare/Dropbox/2021.02_CCpreterm/02.CodeR/NormativeModelling_MindVaV/")
+# load the two functions to get the SD and LOESS coeffient
+source("_calcSD.R")
+source("_calcLOESS.R")
+
+###### Remove VPT children out of age range for FT
+PT <- subset(data, Groups == "PT")
+FT <- subset(data, Groups == "FT")
+#Age range in FT
+range(FT$Pre_Age) # max = 163
+#Age range in VPT
+range(PT$Pre_Age)
+#Explore data
+Age <- data$Pre_Age
+Age [ Age > 163.5 ] <- NA
+#Remove participant outside of age range
+data.original <- data
+data <- subset(data, Age < 163.5)   #6 participants remove
+
+
+######Back to normative modelling
+
+# select the columns that we want to compute z-scores on
+vol <- data[c("CC_Anterior","CC_Mid_Anterior","CC_Central","CC_Mid_Posterior","CC_Posterior","wmcorrected_CC_Anterior","wmcorrected_CC_Mid_Anterior","wmcorrected_CC_Central","wmcorrected_CC_Mid_Posterior","wmcorrected_CC_Posterior","FA_CC_1","FA_CC_2","FA_CC_3","FA_CC_4","FA_CC_5","FA_CC_6","FA_CC_7","ADC_CC_1","ADC_CC_2","ADC_CC_3","ADC_CC_4","ADC_CC_5","ADC_CC_6","ADC_CC_7","ODI_CC_1",	"ODI_CC_2",	"ODI_CC_3",	"ODI_CC_4",	"ODI_CC_5",	"ODI_CC_6",	"ODI_CC_7",	"FICVF_CC_1",	"FICVF_CC_2",	"FICVF_CC_3",	"FICVF_CC_4",	"FICVF_CC_5",	"FICVF_CC_6",	"FICVF_CC_7",	"FISO_CC_1",	"FISO_CC_2",	"FISO_CC_3",	"FISO_CC_4",	"FISO_CC_5",	"FISO_CC_6",	"FISO_CC_7")]
+volname <- data.frame(colnames(vol))
+columnnames <- (volname$colnames.vol.)
+
+#Count number of NA
+row.has.na <- apply(vol, 1, function(x){any(is.na(x))})
+sum(row.has.na)
+
+# order the data by age
+data_age <- data[order(data$Pre_Age),]
+
+# split the data into equal size age bins so that we can allign the data later and do some subsetting
+# Age range = 72 to 163 // 71.5 to 163.5
+# total months = 91 months to divide // 92
+# division of age 91/4= 22.75 // 91/4= 23
+# division of age 91/3= 30.33
+
+agerange <- seq(71.5, 163.5, 23)
+data_age$agebins <- cut(data_age$Pre_Age, agerange)
+data_age$numbins <- as.numeric(data_age$agebins)
+
+ddply(data_age,~Groups+agebins,summarise, freq=length(Groups))
+
+# Control vs Preterm data
+data_age.PT <- subset(data_age, Groups == "PT")
+data_age.FT <- subset(data_age, Groups == "FT")
+
+print("Calculating W-Scores")
+# now in a loop compute the scores for all males
+for (i in unique(columnnames)) {
+  print(paste("working on:",i))
+  # get the normative scores for that columns 
+  normativeScores <- calcLOESS(data_age.FT[,i],data_age.FT$Pre_Age)
+
+  ctltest <- data.frame(agebins = data_age.FT$agebins, normativeScores)
+
+  # need to check for bins that only have one value as they won't provide a standard deviation
+  test <- summarySE(ctltest, measurevar = "Mu", groupvars = "agebins")
+  test <- subset(test, N > 2)
+
+  normative <- ctltest %>% group_by(agebins) %>% summarise_all(mean)
+  colnames(normative) <- c("agebins",paste(i,"_mu",sep = ""),paste(i,"_sd",sep = ""))
+
+  keepBins <- match(test$agebins, normative$agebins)
+  normative <- normative[keepBins,]
+  # in the ASD data compute a z-score for FIQ based on the normative data.
+  # first add the normative data to the ASD data
+  data_age.PT <- merge(data_age.PT,normative, by = "agebins")
+  # then compute the z-score
+  name1 <- paste(i,"_mu",sep = "")
+  name2 <- paste(i,"_sd",sep = "")
+  name3 <- paste(i,"_z",sep = "")
+
+  data_age.PT[,name3] <- ((data_age.PT[,i]-data_age.PT[,name1])/data_age.PT[,name2])
+  data_age.PT[,name1] <- NULL
+  data_age.PT[,name2] <- NULL
+
+  # add the normative scores to the original as well
+  colnames(normativeScores) <- c(name1, name2)
+  data_age.FT[,name1] <- normativeScores[,name1]
+  data_age.FT[,name2] <- normativeScores[,name2]
+  data_age.FT[,name3] <- ((data_age.FT[,i]-data_age.FT[,name1])/data_age.FT[,name2])
+}
+
+data_age <- rbind.fill(data_age.PT, data_age.FT)
+rm(data_age.PT, data_age.FT)
+
+#Create atypical categories
+for (i in unique(columnnames)){
+  name1 <- paste(i,"_mu",sep = "")
+  name2 <- paste(i,"_sd",sep = "")
+  name3 <- paste(i,"_z",sep = "")
+  name4 <- paste(i,"_atypic",sep = "")
+ 
+data_age[,name4] <- data_age[,name3]
+x <- data_age[,name3]
+x[ x > 2 ] <- 5
+x[ x < -2 ] <- 6
+x[ x < 2 ] <- 7
+
+data_age[,name4] <- x
+data_age[,name4] <- factor(data_age[,name4], levels = c(5,6,7), labels = c("Above","Below","Norm"))
+}
+
+save(data_age,volname,file = paste("Wscores_VPT_WithinAgeRange.RData",sep=""))
+rm(i, name1, name2, name3, normativeScores, normative, ctltest)
+
+
+## now create some plots of the above
+regions <- columnnames
+# plot all curves per region per group
+pcol <- viridis(2)
+Vol <- melt(data_age, id.vars = c("Groups","Pre_Age"), measure.vars = regions)
+colnames(Vol) <- c("Group","Age","Region","Value")
+
+plots <- list()
+for(i in unique(Vol$Region)){
+  Voltemp <- subset(Vol, Region == i)
+  print(paste("working on:",i))
+
+plots[[i]] <- ggplot(Voltemp, aes(x=Age, y=Value, fill = Group)) + # make basic plot
+  geom_point(aes(colour = Group), size = 3, alpha = 0.7) + # add scatterplot
+  geom_smooth(method=loess,span = 0.4,   # Add local regression line
+              se=TRUE) +  # Add shaded confidence region
+              scale_color_manual(values=pcol) +
+              scale_fill_manual(values=pcol) +
+  theme_minimal() +
+  ggtitle(paste("Region:",i)) +
+  theme(text = element_text(size = 18),
+        plot.background = element_rect(fill="white"),
+        panel.background = element_rect(fill="white"),
+        axis.text.y = element_text(color="black", size=rel(1)),
+        axis.text.x = element_text(color="black", size=rel(1)),
+        axis.title.x = element_text(color="black", size=rel(1)),
+        axis.title.y = element_text(color="black", size=rel(1)),
+        panel.grid.minor.x = element_blank(),
+        panel.grid.major.x = element_blank(),
+        legend.title = element_blank(),
+        legend.text = element_text(color="black", size=rel(0.7)),
+        legend.background = element_rect(fill="white"),
+        legend.position = "bottom",
+        plot.title = element_text(color="black",hjust = 0.5))
+}
+
+#Save Plots
+print("Printing local regression plots")
+
+pdf(paste("SmoothedCurves_VPT_WithinAgeRangeFT.pdf",sep=""), onefile = TRUE, paper = "a4r")
+for (i in seq(length(plots))) {
+   print(plots[[i]])
+ }
+ dev.off()
+rm(pcol,plots,i,Vol,Voltemp)
+
+# plot z-scores for PT group
+zregions <- sapply(columnnames, function(x) paste(x, "_z", sep=""))
+PT <- subset(data_age, Groups == "PT")
+zVol <- melt(PT, id.vars = c("Pre_Age"), measure.vars = zregions)
+colnames(zVol) <- c("Age","Region","ZScore")
+pcol <- viridis(1)
+
+plots <- list()
+for(i in unique(zVol$Region)){
+  zVoltemp <- subset(zVol, Region == i)
+  print(paste("working on:",i))
+
+plots[[i]] <- ggplot(zVoltemp, aes(x=Age, y=ZScore)) + # make basic plot
+  geom_point(colour = "white", fill = pcol,
+             stroke = 1.5,pch = 21, size = 3,shape = 16, alpha = 0.6) + # add scatterplot
+  geom_smooth(method=loess,span = 0.4,   # Add local regression line
+              se=TRUE) +  # Add shaded confidence region
+              theme_minimal() +
+              ggtitle(paste("Region:",i)) +
+              theme(text = element_text(size = 18),
+                    plot.background = element_rect(fill="white"),
+                    panel.background = element_rect(fill="white"),
+                    axis.text.y = element_text(color="black", size=rel(1)),
+                    axis.text.x = element_text(color="black", size=rel(1)),
+                    axis.title.x = element_text(color="black", size=rel(1)),
+                    axis.title.y = element_text(color="black", size=rel(1)),
+                    panel.grid.minor.x = element_blank(),
+                    panel.grid.major.x = element_blank(),
+                    legend.title = element_blank(),
+                    legend.text = element_text(color="black", size=rel(0.7)),
+                    legend.background = element_rect(fill="white"),
+                    legend.position = "bottom",
+                    plot.title = element_text(color="black",hjust = 0.5))}
+
+#Save as PDF
+print("Printing z-score plots")
+ pdf(paste("PT_Wscores_WithinAgeRangeFT.pdf",sep=""), onefile = TRUE, paper = "a4r")
+for (i in seq(length(plots))) {
+   print(plots[[i]])
+ }
+ dev.off()
+ rm(zregions,zVol,plots,i,zVoltemp, pcol)
+
+
+#---------------------------------------------
+################### REMOVE MISSING VALUES
+#---------------------------------------------
+ 
+#### Keep original version of data_age
+
+original.data_age <- data_age
+
+#### Remove NA from data
+#1. Add mean of the group for a few subject
+#04_vav_p, 038_vav_p, 08_vav_p: to avoid missing values, T1 scores for flanker were attributed to PRE (t2) data (wait group)
+
+#3. Add mean of the agebin-subgroup instead of NA
+
+which(is.na(data_age$SES_largo)) # 47 Preterm (94.5,118];65 control (71.5,94.5]
+which( colnames(data_age)=="SES_largo") #7
+which( colnames(data_age)=="agebins")#1
+ddply(data_age,~Groups+agebins,summarise,mean=mean(SES_largo, na.rm = TRUE),sd=sd(SES_largo, na.rm = TRUE))
+data_age[47,7] = 4.875
+data_age[65,7] = 2.516667
+
+
+which(is.na(data_age$GeneralCognFunct)) #56: (94.5,118]
+which( colnames(data_age)=="GeneralCognFunct")
+ddply(data_age,~Groups+agebins,summarise,mean=mean(GeneralCognFunct, na.rm = TRUE),sd=sd(GeneralCognFunct, na.rm = TRUE))
+data_age[56,323] = 103.5
+
+which(is.na(data_age$Pre_RT_mean_Incong_flanker)) # 21 (118,140] 35 (71.5,94.5] 36 (71.5,94.5] 37 (71.5,94.5] 38 (71.5,94.5] 39 (71.5,94.5] 52 (94.5,118] 55 (94.5,118] 58 (94.5,118]
+which(is.na(data_age$Pre_RT_mean_Cong_flanker)) 
+which( colnames(data_age)=="Pre_RT_mean_Incong_flanker" )#203
+ddply(data_age,~Groups+agebins,summarise,mean=mean(Pre_RT_mean_Incong_flanker,na.rm=TRUE),sd=sd(Pre_RT_mean_Incong_flanker,na.rm=TRUE))
+
+data_age[21,203] = 1056.703
+data_age[35,203] =1565.578
+data_age[36,203] =1565.578
+data_age[37,203] =1565.578
+data_age[38,203] =1565.578
+data_age[39,203] =1565.578
+data_age[52,203] =1293.422
+data_age[55,203] =1293.422 
+data_age[58,203] =1293.422
+  
+which( colnames(data_age)=="Pre_RT_mean_Cong_flanker" )#202
+# 21 (118,140] 35 (71.5,94.5] 36 (71.5,94.5] 37 (71.5,94.5] 38 (71.5,94.5] 39 (71.5,94.5] 52 (94.5,118] 55 (94.5,118] 58 (94.5,118]
+ddply(data_age,~Groups+agebins,summarise,mean=mean(Pre_RT_mean_Cong_flanker,na.rm=TRUE),sd=sd(Pre_RT_mean_Cong_flanker,na.rm=TRUE))
+
+data_age[21,202] =1045.3469
+data_age[35,202] =1569.1484
+data_age[36,202] =1569.1484
+data_age[37,202] =1569.1484
+data_age[38,202] =1569.1484
+data_age[39,202] =1569.1484
+data_age[52,202] =1482.9223
+data_age[55,202] =1482.9223
+data_age[58,202] =1482.9223
+ 
+# For accuracy 0 are missing values !  
+data_age$Pre_ACC_Sum_Cong_flanker[data_age$Pre_ACC_Sum_Cong_flanker == 0] <- NA
+data_age$Pre_ACC_Sum_Incong_flanker[data_age$Pre_ACC_Sum_Incong_flanker == 0] <- NA
+
+which(is.na(data_age$Pre_ACC_Sum_Incong_flanker)) # 21 (140,164] 35 (71.5,94.5] 36 (71.5,94.5]  37 (71.5,94.5] 38 (71.5,94.5] 39 (71.5,94.5] 52 (94.5,118] 55 (94.5,118] 58 (94.5,118]  53 (94.5,118]
+which( colnames(data_age)=="Pre_ACC_Sum_Incong_flanker" )#196
+ddply(data_age,~Groups+agebins,summarise,mean=mean(Pre_ACC_Sum_Incong_flanker,na.rm=TRUE),sd=sd(Pre_ACC_Sum_Incong_flanker,na.rm=TRUE))
+
+data_age[21,196] =14.50000
+data_age[35,196] =13.58025 
+data_age[36,196] =13.58025 
+data_age[37,196] =13.58025 
+data_age[38,196] =13.58025 
+data_age[39,196] =13.58025 
+data_age[52,196] =14.76148
+data_age[53,196] =14.76148
+data_age[55,196] =14.76148
+data_age[58,196] =15.03316
+
+which( colnames(data_age)=="Pre_ACC_Sum_Cong_flanker" )#195
+which(is.na(data_age$Pre_ACC_Sum_Cong_flanker)) # 21 (140,164] 35 (71.5,94.5] 36 (71.5,94.5]  37 (71.5,94.5] 38 (71.5,94.5] 39 (71.5,94.5] 52 (94.5,118] 55 (94.5,118] 58 (94.5,118]  53 (94.5,118]
+ddply(data_age,~Groups+agebins,summarise,mean=mean(Pre_ACC_Sum_Cong_flanker,na.rm=TRUE),sd=sd(Pre_ACC_Sum_Cong_flanker,na.rm=TRUE))
+
+data_age[21,195] =14.90000
+data_age[35,195] =14.69136
+data_age[36,195] =14.69136
+data_age[37,195] =14.69136
+data_age[38,195] =14.69136
+data_age[39,195] =14.69136
+data_age[52,195] =15.03316
+data_age[53,195] =15.03316
+data_age[55,195] =15.03316
+data_age[58,195] =15.03316
+
+which(is.na(data_age$Pre_NB_NEPSY_TE_ToTal)) # 39: (71.5,94.5];  87: FT (118,140]
+which( colnames(data_age)=="Pre_NB_NEPSY_TE_ToTal" )# 165
+ddply(data_age,~Groups+agebins,summarise,mean=mean(Pre_NB_NEPSY_TE_ToTal,na.rm=TRUE),sd=sd(Pre_NB_NEPSY_TE_ToTal,na.rm=TRUE))
+
+data_age[39,165] = 20.08333
+data_age[87,165] =  24.50000
+
+
+which(is.na(data_age$Pre_NB_NEPSY_TE_ToTal)) # 39: (71.5,94.5];  87: FT (118,140]
+which( colnames(data_age)=="Pre_NB_NEPSY_AR" )# 161
+ddply(data_age,~Groups+agebins,summarise,mean=mean(Pre_NB_NEPSY_AR,na.rm=TRUE),sd=sd(Pre_NB_NEPSY_AR,na.rm=TRUE))
+
+data_age[87,161] =  27.33333
+
+which(is.na(data_age$Pre_NS_NEPSY_AR)) # 87,  FT (118,140]
+which( colnames(data_age)=="Pre_NS_NEPSY_AR" )# 162
+ddply(data_age,~Groups+agebins,summarise,mean=mean(Pre_NS_NEPSY_AR,na.rm=TRUE),sd=sd(Pre_NS_NEPSY_AR,na.rm=TRUE))
+
+data_age[87,162] = 10.75000
+
+which(is.na(data_age$Pre_NB_Wisc_V_Mem_leTTre_chiff)) # 87,FT (118,140]
+which( colnames(data_age)=="Pre_NB_Wisc_V_Mem_leTTre_chiff" )# 159
+ddply(data_age,~Groups+agebins,summarise,mean=mean(Pre_NB_Wisc_V_Mem_leTTre_chiff,na.rm=TRUE),sd=sd(Pre_NB_Wisc_V_Mem_leTTre_chiff,na.rm=TRUE))
+
+data_age[87,159] = 18.00000
+
+which(is.na(data_age$Pre_NS_Wisc_V_Mem_leTTre_chif)) # 87,FT (118,140]
+which( colnames(data_age)=="Pre_NS_Wisc_V_Mem_leTTre_chif" )# 160
+ddply(data_age,~Groups+agebins,summarise,mean=mean(Pre_NS_Wisc_V_Mem_leTTre_chif,na.rm=TRUE),sd=sd(Pre_NS_Wisc_V_Mem_leTTre_chif,na.rm=TRUE))
+
+data_age[87,160] = 11.16667
+
+which(is.na(data_age$Pre_NB_SDQ_ToTal)) # 87,FT (118,140] 88, FT (118,140]
+which( colnames(data_age)=="Pre_NB_SDQ_ToTal" )# 152
+ddply(data_age,~Groups+agebins,summarise,mean=mean(Pre_NB_SDQ_ToTal,na.rm=TRUE),sd=sd(Pre_NB_SDQ_ToTal,na.rm=TRUE))
+
+data_age[87,152] = 9.090909
+data_age[88,152] = 9.090909
+
+
+which(is.na(data_age$Pre_NS_BRIEF_CEG))# 87,FT (118,140] 88, FT (118,140]
+which( colnames(data_age)=="Pre_NS_BRIEF_CEG" )# 128
+ddply(data_age,~Groups+agebins,summarise,mean=mean(Pre_NS_BRIEF_CEG,na.rm=TRUE),sd=sd(Pre_NS_BRIEF_CEG,na.rm=TRUE))
+
+data_age[87,128] =50.81818
+data_age[88,128] = 50.81818
+
+which(is.na(data_age$Pre_NS_BRIEF_IM)) # 87,FT (118,140] 88, FT (118,140]
+which( colnames(data_age)=="Pre_NS_BRIEF_IM" )# 126
+ddply(data_age,~Groups+agebins,summarise,mean=mean(Pre_NS_BRIEF_IM,na.rm=TRUE),sd=sd(Pre_NS_BRIEF_IM,na.rm=TRUE))
+
+data_age[87,126] =  52.72727
+data_age[88,126] =  52.72727
+
+which(is.na(data_age$Pre_NS_BRIEF_IRC)) # 87,FT (118,140] 88, FT (118,140]
+which( colnames(data_age)=="Pre_NS_BRIEF_IRC" )# 124
+ddply(data_age,~Groups+agebins,summarise,mean=mean(Pre_NS_BRIEF_IRC,na.rm=TRUE),sd=sd(Pre_NS_BRIEF_IRC,na.rm=TRUE))
+
+data_age[87,124] =  51.36364
+data_age[88,124] =  51.36364
+
+ 
+ 
+#---------------------------------------------
+################### CREATE ALL SCORES FOR PLSC
+#---------------------------------------------
+
+#Run previous code to create scores
+
+#---------------------------------------------
+######################## Export Wscores VPT_WithinAgeRangeFT
+#---------------------------------------------
+
+vol.columnnames <- (volname$colnames.vol.)
+# Create new data
+vol <-data_age[c("ID")]
+# Add w score to the new dataframe
+for (i in unique(vol.columnnames)){
+name1 <- paste(i,"_z",sep = "")
+vol[,name1]<-data_age[,name1]}
+
+
+### 
+behav <-data_age[c("ID","Groups","agebins","SES_largo","BW_zscore","AG_inWeeks","Pds_N","Pre_Age","GeneralCognFunct","Pre_RT_mean_Incong_flanker","Pre_RT_mean_Cong_flanker","Pre_NB_NEPSY_TE_ToTal","Pre_NB_NEPSY_AR","Pre_NS_NEPSY_AR","Pre_NB_Wisc_V_Mem_leTTre_chiff","Pre_NS_Wisc_V_Mem_leTTre_chif","Pre_NB_SDQ_ToTal","Pre_NS_BRIEF_CEG","Pre_NS_BRIEF_IM","Pre_NS_BRIEF_IRC","flanker_inhib_RT","flanker_inhib_ACC","flanker_inhib_RT_Aadj","flanker_inhib_ACC_Aadj","flanker_Cong_RT_Aadj","TOM_Aadj","AR_Aadj","SLC_Aadj","flanker_inhib_RT_SAadj","flanker_inhib_ACC_SAadj","flanker_Cong_RT_SAadj","TOM_SAadj","AR_SAadj","SLC_SAadj","AR_NS_Sadj","SLC_NS_Sadj","GeneralCognFunct_Sadj")]
+
+# Merging data
+all_data <- merge(behav,vol,by = "ID")
+
+# Check that all NA are removed
+all_data2 <-na.omit(all_data)
+
+# only PT
+PT <- subset(all_data, Groups == "PT")
+PT2 <-na.omit(PT)
+
+
+#Inf value in ADC_CC_2_z
+PT$ ADC_CC_2_z[PT$ ADC_CC_2_z == "Inf"] <- 0.01
+PT$ ADC_CC_2_z[PT$ ADC_CC_2_z == "-Inf"] <- -0.01
+
+# Get variable names
+plsvar <- data.frame(colnames(PT))
+plsvar <- (plsvar$colnames.PT.)
+
+# create .cvs file for each column in pls
+for (i in unique(plsvar)){
+  name1 <- paste(i,sep = "")
+array <- PT[,name1]
+array<- data.frame(array) 
+
+write.table((array),                              
+ paste0( "/Users/prepare/Dropbox/2021.02_CCpreterm/01.Data/04.PLSmat/Wscores_VPT_WithinAgeRangeFT/", name1,".csv"),
+ row.names=FALSE, col.names=FALSE)}
+
+```
+
+ ############################# Illustration PLSC
+```{r data, echo=TRUE}
+
+### Load Loadings FT
+setwd("/Users/prepare/Dropbox/2021.02_CCpreterm/04.CodeMatlab/myPLS/RESULTS/Raw_FT/")
+data <-read.csv("Ub.csv",header = TRUE,sep = ",", na.string = "NA",stringsAsFactors = F)  
+
+### Load Loadings VPT
+setwd("/Users/prepare/Dropbox/2021.02_CCpreterm/04.CodeMatlab/myPLS/RESULTS/Raw_VPT/")
+data <-read.csv("Ub.csv", header = TRUE,sep = ",",na.string = "NA",stringsAsFactors = F)  
+
+## Load Loadings W-scores VPT
+setwd("/Users/prepare/Dropbox/2021.02_CCpreterm/04.CodeMatlab/myPLS/RESULTS/Wscores_VPT_GOOD/")
+data <-read.csv("Ub.csv", header = TRUE, sep = ",",na.string = "NA",stringsAsFactors = F)
+
+### Set variables
+data$significance <- factor(data$significance,levels = c(0,1), labels = c("notsig","sig"))
+data$Variables <- factor(data$Variables, levels =data$Variables[order(data$Correlation)])
+
+
+### Set themes
+generaltheme <- theme(legend.title = element_blank(), axis.text = element_text(size = 11, color="black"), axis.title.y = element_blank(), axis.title.x = element_text(), legend.position = "none", panel.grid.major = element_blank(), panel.grid.minor = element_blank(),panel.background = element_blank(), axis.line = element_line(colour = "black"))
+
+
+ggplot(data, aes(x=Variables, y=Correlation, label=significance)) + 
+  geom_bar(stat='identity', aes(fill=significance), width=.5)  +
+  coord_flip()+
+  scale_fill_manual(name="significance", 
+                    labels = c("sig", "notsig"), 
+                    values = c("sig"="#5685e9","notsig"="#A9A9A9"))+
+  geom_errorbar(aes(ymin=Correlation-LC_behav_loadings_std, ymax=Correlation+LC_behav_loadings_std), width=.1,
+                position=position_dodge(.5), color="grey25") +
+  generaltheme +
+  theme(panel.grid.major.x = element_line(colour="grey", size=0.3))
+
+```
+
+############################# Illustration Age Normative Modelling
+```{r data, echo=TRUE}
+
+#Remove for illustration : 59 - 019_vav_p, CCposterior = 103.3006
+data_age <- data_age[-c(59), ] 
+
+## now create some plots of the above
+regions <- columnnames
+# plot all curves per region per group
+Vol <- melt(data_age, id.vars = c("Groups","Pre_Age"), measure.vars = regions)
+colnames(Vol) <- c("Group","Age","Region","Value")
+
+generaltheme <- theme(legend.title = element_blank(), axis.text = element_text(size = 11, color="black"), axis.title.y = element_blank(), axis.title.x = element_text(), legend.position = "none", panel.grid.major=element_line(colour="gray92"), panel.grid.minor = element_blank(),panel.background = element_blank(), axis.line = element_line(colour = "black"))
+
+
+plots <- list()
+for(i in unique(Vol$Region)){
+  Voltemp <- subset(Vol, Region == i)
+  print(paste("working on:",i))
+
+plots[[i]] <- ggplot(Voltemp, aes(x=Age, y=Value, fill = Group)) + # make basic plot
+  geom_point(aes(colour = Group), size = 2, alpha = 0.7) + # add scatterplot
+  geom_smooth(method=loess,span = 0.4,   # Add local regression line
+              se=TRUE) +  # Add shaded confidence region
+scale_color_manual(values=c("#56B4E9","#FBC02D"))+
+  scale_fill_manual(values=c("#56B4E9","#FBC02D"))+
+  generaltheme + theme(text = element_text(size = 20)) + theme(axis.text = element_text(size = 20)) + scale_y_continuous(limits = c(400, 1400), breaks = seq(400,1400,200))}
+
+# To plot graphs: 
+plots["CC_Posterior"]
+
+
+################### Plot errorbar (mean and 2 sd) + dots from PT :) 
+
+# Control vs Preterm data
+data_age.PT <- subset(data_age, Groups == "PT")
+data_age.FT <- subset(data_age, Groups == "FT")
+
+# Plot
+data_age.FT$agebins <- as.factor(data_age.FT$agebins)
+sum<- summarySE(data_age.FT, measurevar="FICVF_CC_7", groupvars=c("agebins")) 
+sum$A <- sum$FICVF_CC_7
+sum$B <- sum$agebins
+sum$two.sd <- 2*sum[,4]
+pd <- position_dodge(0.1)
+ 
+ggplot(sum, aes(x=B,y=A))+
+    geom_errorbar(aes(ymin=A-two.sd, ymax=A+two.sd), width=.1) +
+    geom_point(position=pd, size=5)+ 
+  geom_point(data = data_age.PT,aes(x=agebins, y= FICVF_CC_7), color='purple', size=2)+
+  theme_minimal()
+
+################### Plot errorbar (mean and 1 sd) + dots from PT :) 
+
+# Control vs Preterm data
+data_age.PT <- subset(data_age, Groups == "PT")
+data_age.FT <- subset(data_age, Groups == "FT")
+
+# Plot Volume CC Posterior
+data_age.FT$agebins <- as.factor(data_age.FT$agebins)
+sum<- summarySE(data_age.FT, measurevar="CC_Posterior", groupvars=c("agebins")) 
+sum$A <- sum$CC_Posterior
+sum$B <- sum$agebins
+sum$one.sd <- sum[,4]
+pd <- position_dodge(0.1)
+ 
+ggplot(sum, aes(x=B,y=A))+
+    geom_errorbar(aes(ymin=A-one.sd, ymax=A+one.sd), width=.1, color="#FBC02D", size=3.5) +
+    geom_point(position=pd, size=5, color="#FBC02D")+ 
+  geom_point(data = data_age.PT,aes(x=agebins, y= CC_Posterior), color="#56B4E9", size=2)+
+ generaltheme+ theme(text = element_text(size = 20)) + theme(axis.text = element_text(size = 20)) + scale_y_continuous(limits = c(400, 1400), breaks = seq(400,1400,200))
+
+
+# Plot FA CC1
+data_age.FT$agebins <- as.factor(data_age.FT$agebins)
+sum<- summarySE(data_age.FT, measurevar="FA_CC_1", groupvars=c("agebins")) 
+sum$A <- sum$FA_CC_1
+sum$B <- sum$agebins
+sum$one.sd <- sum[,4]
+pd <- position_dodge(0.1)
+ 
+ggplot(sum, aes(x=B,y=A))+
+    geom_errorbar(aes(ymin=A-one.sd, ymax=A+one.sd), width=.1) +
+    geom_point(position=pd, size=5)+ 
+  geom_point(data = data_age.PT,aes(x=agebins, y= FA_CC_1), color="#56B4E9", size=2)+
+ generaltheme
+
+
+#### plot z-scores for PT group
+
+zregions <- sapply(columnnames, function(x) paste(x, "_z", sep=""))
+PT <- subset(data_age, Groups == "PT")
+zVol <- melt(PT, id.vars = c("Pre_Age"), measure.vars = zregions)
+colnames(zVol) <- c("Age","Region","ZScore")
+
+plots <- list()
+for(i in unique(zVol$Region)){
+  zVoltemp <- subset(zVol, Region == i)
+  print(paste("working on:",i))
+  
+plots[[i]] <- ggplot(zVoltemp, aes(x=Age, y=ZScore)) + # make basic plot
+  geom_point(colour = "white", fill ="#56B4E9",stroke = 1.5,pch = 21, size = 3,shape = 16, alpha = 0.6) + # add scatterplot
+  geom_smooth(method=loess,span = 0.4) +  # Add local regression line
+  geom_hline(yintercept=0, linetype="dashed", color = "#FBC02D", size=1.5)+
+  generaltheme+ theme(text = element_text(size = 20)) + theme(axis.text = element_text(size = 20)) + scale_y_continuous(limits = c(-5, 5), breaks = seq(-5,5,2.5))}
+
+#Graph: 
+plots["CC_Posterior_z"]
+  
+```
+
+
