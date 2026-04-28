@@ -1,0 +1,257 @@
+%%%%%%%%%% Multi-shell diffusion Weighted images processing and metrics extraction
+
+%% Paths
+
+addpath (‘/spm12/’)
+mainPath = ‘mydata’; %!!!Set path in which you have your data
+
+subjectFolder = spm_select(‘List’,mainPath,‘dir’,‘[participant]*’); % folder starting with “participant”
+
+%% Diffusion processing
+
+for subj=1:size(subjectFolder,1)
+
+thisSubj = char(deblank(subjectFolder(subj,:))); % take only 1 subject name
+c = strsplit(thisSubj, ‘_’); % slit the name of the subject (each in 1 column)= 012 mind c
+
+     structPathPrema = [mainPath thisSubj filesep 'DWI_images'] ; %filesep = file separator ! 
+     
+     t1PathPrema = [mainPath thisSubj filesep 't1_image' filesep] ; %filesep = file separator ! 
+
+DcmHeader = [mainPath thisSubj filesep 'dcmHeaders.mat'] ;
+load(DcmHeader);
+
+%% Merge dwi volumes
+
+!fslmerge -t 10dirb200.nii micro_struct_10dir_b200_1_3mm_iso_00*.nii
+!fslmerge -t 24dirb4200.nii micro_struct_24dir_b4200_1_3mm_iso_00*.nii
+!fslmerge -t 26dirb4200.nii micro_struct_26dir_b4200_1_3mm_iso_00*.nii
+!fslmerge -t 30dirb1700.nii micro_struct_30dir_b1700_1_3mm_iso_00*.nii
+
+%% Preprocessing of independent b-shells
+
+% 1. Preproc 10dirb200
+
+ %bvecs bvals
+
+bvecs_10dir200 = %extract bvec table ;
+bvals_10dir200 = %extract bval table ;
+gradtable_10dir200 = horzcat(bvecs_10dir200,bvals_10dir200) ;
+dlmwrite(‘grad_10dirb200.b’,gradtable_10dir200,‘delimiter’,’ ')
+
+% preproc
+
+!dwiextract 10dirb200.nii.gz -grad grad_10dirb200.b -bzero 10dirb200_b0.nii -force
+!bet2 10dirb200_b0 10dirb200_b0_bet -m -f 0.1 -v
+!dwidenoise 10dirb200.nii.gz 10dirb200_d.mif -noise 10dirb200_noise.mif -mask 10dirb200_b0_bet_mask.nii.gz
+!mrdegibbs 10dirb200_d.mif 10dirb200_dd.mif
+!dwipreproc 10dirb200_dd.mif 10dirb200_ddp.mif -rpe_none -pe_dir AP -grad grad_10dirb200.b -nocleanup
+!mrconvert 10dirb200_ddp.mif 10dirb200_ddp.nii
+
+% 2. Preproc 24dirb4200
+
+ %bvecs bvals
+
+bvecs_24dir4200 = %extract bvec table ; ;
+bvals_24dir4200 = %extract bval table ;
+gradtable_24dir4200 = horzcat(bvecs_24dir4200,bvals_24dir4200) ;
+dlmwrite(‘grad_24dirb4200.b’,gradtable_24dir4200,‘delimiter’,’ ')
+
+ % preproc
+
+!dwiextract 24dirb4200.nii.gz -grad grad_24dirb4200.b -bzero 24dirb4200_b0.nii
+!bet2 24dirb4200_b0 24dirb4200_b0_bet -m -f 0.1 -v
+!dwidenoise 24dirb4200.nii.gz 24dirb4200_d.mif -noise 24dirb4200_noise.mif -mask 24dirb4200_b0_bet_mask.nii.gz
+!mrdegibbs 24dirb4200_d.mif 24dirb4200_dd.mif
+!dwipreproc 24dirb4200_dd.mif 24dirb4200_ddp.mif -rpe_none -pe_dir AP -grad grad_24dirb4200.b -nocleanup
+!mrconvert 24dirb4200_ddp.mif 24dirb4200_ddp.nii
+
+% 3. Preproc 26dirb4200
+
+ %bvecs bvals
+
+bvecs_26dir4200 = %extract bvec table ;
+bvals_26dir4200 = %extract bval table ;
+gradtable_26dir4200 = horzcat(bvecs_26dir4200,bvals_26dir4200) ;
+dlmwrite(‘grad_26dirb4200.b’,gradtable_26dir4200,‘delimiter’,’ ')
+
+ % preproc
+
+!dwiextract 26dirb4200.nii.gz -grad grad_26dirb4200.b -bzero 26dirb4200_b0.nii
+!bet2 26dirb4200_b0 26dirb4200_b0_bet -m -f 0.1 -v
+!dwidenoise 26dirb4200.nii.gz 26dirb4200_d.mif -noise 26dirb4200_noise.mif -mask 26dirb4200_b0_bet_mask.nii.gz
+!mrdegibbs 26dirb4200_d.mif 26dirb4200_dd.mif
+!dwipreproc 26dirb4200_dd.mif 26dirb4200_ddp.mif -rpe_none -pe_dir AP -grad grad_26dirb4200.b -nocleanup
+!mrconvert 26dirb4200_ddp.mif 26dirb4200_ddp.nii
+
+% 4. Preproc 30dirb1700
+
+ %bvecs bvals
+
+bvecs_30dir1700 = %extract bvec table ; ;
+bvals_30dir1700 = %extract bval table ;;
+gradtable_30dir1700 = horzcat(bvecs_30dir1700,bvals_30dir1700) ;
+dlmwrite(‘grad_30dirb1700.b’,gradtable_30dir1700,‘delimiter’,’ ')
+
+% preproc
+
+!dwiextract 30dirb1700.nii.gz -grad grad_30dirb1700.b -bzero 30dirb1700_b0.nii
+!bet2 30dirb1700_b0 30dirb1700_b0_bet -m -f 0.1 -v
+!dwidenoise 30dirb1700.nii.gz 30dirb1700_d.mif -noise 30dirb1700_noise.mif -mask 30dirb1700_b0_bet_mask.nii.gz
+!mrdegibbs 30dirb1700_d.mif 30dirb1700_dd.mif
+!dwipreproc 30dirb1700_dd.mif 30dirb1700_ddp.mif -rpe_none -pe_dir AP -grad grad_30dirb1700.b -nocleanup
+!mrconvert 30dirb1700_ddp.mif 30dirb1700_ddp.nii
+
+%% Merge 4 shells
+
+% Extract b0 image for coregistration
+% 10dir
+!dwiextract 10dirb200_ddp.nii -grad grad_10dirb200.b -bzero 10dirb200_ddp_b0.nii
+% 24 dir
+!dwiextract 24dirb4200_ddp.nii -grad grad_24dirb4200.b -bzero 24dirb4200_ddp_b0.nii
+% 26 dir
+!dwiextract 26dirb4200_ddp.nii -grad grad_26dirb4200.b -bzero 26dirb4200_ddp_b0.nii
+% 30 dir
+!dwiextract 30dirb1700_ddp.nii -grad grad_30dirb1700.b -bzero 30dirb1700_ddp_b0.nii
+
+%Registeration of all sequences to 10dirb200
+%NB = As we used the bet mask in the preprocessing, the dwi image is already brain extracted
+% 24 dir to 10 dir
+!tkregister2 --mov 24dirb4200_ddp_b0.nii --targ 10dirb200_ddp_b0.nii --regheader --reg 24to10_b0.dat --noedit
+!mri_vol2vol --mov 24dirb4200_ddp.nii --targ 10dirb200_ddp.nii --reg 24to10_b0.dat --o 24to10_ddp.nii
+% 26 dir to 10 dir
+!tkregister2 --mov 26dirb4200_ddp_b0.nii --targ 10dirb200_ddp_b0.nii --regheader --reg 26to10_b0.dat --noedit
+!mri_vol2vol --mov 26dirb4200_ddp.nii --targ 10dirb200_ddp.nii --reg 26to10_b0.dat --o 26to10_ddp.nii
+% 30 dir to 10 dir
+!tkregister2 --mov 30dirb1700_ddp_b0.nii --targ 10dirb200_ddp_b0.nii --regheader --reg 30to10_b0.dat --noedit
+!mri_vol2vol --mov 30dirb1700_ddp.nii --targ 10dirb200_ddp.nii --reg 30to10_b0.dat --o 30to10_ddp.nii
+
+%merge all images into one diffusion image
+!fslmerge -t dwi_merge_ddp.nii 10dirb200_ddp.nii 24to10_ddp.nii 26to10_ddp.nii 30to10_ddp.nii
+
+%Merge gradient tables
+gradtable_dwi_merge = vertcat(gradtable_10dir200,gradtable_24dir4200,gradtable_26dir4200,gradtable_30dir1700) ;
+dlmwrite(‘gradtable_dwi_merge.b’,gradtable_dwi_merge,‘delimiter’,’ ') ;
+
+%% Normalise
+% using MRtrix
+%1. add gradient info to dwi image, 2. extract mean b0 image 3. create mask with meanb0 4. normalise
+!mrconvert dwi_merge_ddp.nii.gz dwi_merge_ddp.mif -grad gradtable_dwi_merge.b
+!dwiextract dwi_merge_ddp.mif - -bzero | mrmath - mean meanb0_dwi_merge_ddp.nii -axis 3
+!bet2 meanb0_dwi_merge_ddp meanb0_dwi_merge_ddp -m -f 0.1
+!dwinormalise dwi_merge_ddp.mif meanb0_dwi_merge_ddp_mask.nii.gz dwi_merge_ddp_norm.mif
+
+%% Create final Diffusion image to be used for DTI/NOODI and tractography
+%Add bvecs and bvals to the dwi image (be careful of the order!)
+!mrconvert dwi_merge_ddp_norm.mif dwi.mif -grad gradtable_dwi_merge.b -datatype float32 -stride 0,0,0,1
+!mrconvert dwi.mif dwi.nii
+!dwiextract dwi.mif - -bzero | mrmath - mean dwi_b0.nii -axis 3
+!bet2 dwi_b0.nii dwi_b0 -m -f 0.1
+
+%% T1 coregister to b0
+% bet T1 - for bet use bet or bet and adjust value (-B = optimisation of bet)
+% Check quality !
+
+!fslreorient2std …/t1/t1_mprage_sag_p2_iso.nii …/t1/t1_reoriented.nii.gz ;
+!robustfov -i …/t1/t1_reoriented.nii.gz -r …/t1/t1_reoriented_crop.nii.gz ;
+!bet …/t1/t1_reoriented_crop.nii.gz …/t1/t1_bet -f 0.1 -B ;
+
+%–> if results from bet2 are not good (even when playing with f value),
+%try manual cropping before re-running bet
+
+% fsl coreg
+!rm dwi_b0.nii
+!flirt -dof 6 -cost normmi -in …/t1/t1_bet.nii.gz -ref dwi_b0.nii.gz -omat t1_2_b0_mrtix.txt
+!transformconvert t1_2b0_fsl.mat …/t1/t1_bet.nii.gz dwi_b0.nii.gz flirt_import t1_2_b0_mrtix.txt
+!mrtransform -linear t1_2_b0_mrtix.txt …/t1/t1_bet.nii.gz t1_2b0.nii.gz -force
+
+%% Create 5TT file
+
+!5ttgen fsl t1_2b0.nii.gz 5tt.mif -premasked
+!mrconvert 5tt.mif 5tt.nii
+!5tt2vis 5tt.nii 5tt_visualisation.nii
+
+%% Create folder with final preprocessed images
+
+!mkdir -p a_voxel_level_modelling
+cd a_voxel_level_modelling
+!cp …/dwi.mif dwi.mif
+!cp …/dwi.nii dwi.nii
+!cp …/dwi_b0.nii.gz dwi_b0.nii.gz
+!cp …/5tt.mif 5tt.mif
+!cp …/t1_2b0.nii.gz t1_2b0.nii.gz
+!cp …/dwi_b0_mask.nii.gz dwi_b0_mask.nii.gz
+
+%% Create tensor maps
+!dwi2tensor dwi.mif dwi_tensor.mif -mask dwi_b0_mask.nii.gz
+!tensor2metric dwi_tensor.mif -fa dwi_tensor_fa.nii -adc dwi_tensor_adc.nii -rd dwi_tensor_rd.nii -ad dwi_tensor_md.nii -vector dwi_tensor_vec.nii -mask dwi_b0_mask.nii.gz
+
+!rotate_bvecs -i dwi.bvecs -t FA_2_MNI.mat -o dwi_MNI.bvecs
+!flirt -ref MNI_FA_template.nii.gz -in dwi_b0_mask.nii.gz -out dwi_b0_mask_MNI.nii.gz -applyxfm -init FA_2_MNI.mat -dof 6
+!flirt -ref MNI_FA_template.nii.gz -in dwi_tensor_rd.nii -out dwi_tensor_rd_MNI.nii.gz -applyxfm -init FA_2_MNI.mat -dof 6
+!flirt -ref MNI_FA_template.nii.gz -in dwi_tensor_adc.nii -out dwi_tensor_adc_MNI.nii.gz -applyxfm -init FA_2_MNI.mat -dof 6
+!flirt -ref MNI_FA_template.nii.gz -in dwi_tensor_ad.nii -out dwi_tensor_ad_MNI.nii.gz -applyxfm -init FA_2_MNI.mat -dof 6
+
+!mrconvert dwi_b0_mask_MNI.nii.gz dwi_b0_mask_MNI.mif
+
+%% Response Function using MSMT + CSD MSMT
+!dwi2response msmt_5tt dwi.mif 5tt.mif rf_msmt5tt_wm.txt rf_msmt5tt_gm.txt rf_msmt5tt_csf.txt
+!dwi2fod msmt_csd dwi.mif rf_msmt5tt_wm.txt fods_msmt5tt_wm.mif rf_msmt5tt_gm.txt fods_msmt5tt_gm.nii rf_msmt5tt_csf.txt fods_msmt5tt_csf.nii
+
+%% Tracto 20M
+!tckgen -algorithm iFOD2 fods_msmt5tt_wm.mif 20M.tck -seed_image dwi_b0_mask.nii -mask dwi_b0_mask.nii -maxlength 250 -select 20M -cutoff 0.06 -backtrack
+!tcksift2 20M.tck fods_msmt5tt_wm.mif 20M.sift2.txt
+
+%% Create NODDI maps
+
+mkdir noddi
+cd noddi
+
+CreateROI(‘dwi.hdr’, ‘dwi_b0_mask.hdr’, ‘NODDI_wb.mat’);
+
+protocol = FSL2Protocol(‘dwi.bvals’, ‘dwi.bvecs’);
+
+noddi = MakeModel(‘WatsonSHStickTortIsoV_B0’);
+
+batch_fitting(‘NODDI_wb.mat’, protocol, noddi, ‘FittedParams.mat’,48);
+
+% when no parallele pool = batch_fitting_single(‘NODDI_wb.mat’, protocol, noddi, ‘FittedParams.mat’);
+
+SaveParamsAsNIfTI(‘FittedParams.mat’, ‘NODDI_wb.mat’, ‘dwi_b0_mask.hdr’, ‘noddi_wb’)
+
+% Output volumes:
+% - Neurite density (or intra-cellular volume fraction): example_ficvf.nii
+% - Orientation dispersion index (ODI): example_odi.nii
+% - CSF volume fraction: example_fiso.nii >>> isotropic (CSF) volume fraction
+% - Fibre orientation: example_fibredirs_{x,y,z}vec.nii
+% - Fitting objective function values: example_fmin.nii
+% - Concentration parameter of Watson distribution used to compute ODI: example_kappa.nii
+
+!flirt -ref MNI_FA_template.nii.gz -in noddi_wb_fiso.nii -out noddi_wb_fiso_MNI.nii -applyxfm -init FA_2_MNI.mat -dof 6
+!flirt -ref MNI_FA_template.nii.gz -in noddi_wb_ficvf.nii -out noddi_wb_ficvf_MNI.nii -applyxfm -init FA_2_MNI.mat -dof 6
+!flirt -ref MNI_FA_template.nii.gz -in noddi_wb_odi.nii -out noddi_wb_odi_MNI.nii -applyxfm -init FA_2_MNI.mat -dof 6
+
+%% Extract Tractseg tractography (https://github.com/MIC-DKFZ/TractSeg)
+
+!TractSeg -i dwi_MNI.nii.gz -o tractseg --raw_diffusion_input --brain_mask dwi_b0_mask_MNI.mif
+
+cd tractseg
+!flip_peaks -i peaks.nii.gz -o my_peaks_flip_x.nii.gz -a x
+!rm –r bundle_segmentations
+!TractSeg -i my_peaks_flip_x.nii.gz -o tractseg_output
+!TractSeg -i my_peaks_flip_x.nii.gz --output_type TOM
+!TractSeg -i my_peaks_flip_x.nii.gz --output_type endings_segmentation
+!Tracking -i my_peaks_flip_x.nii.gz -o tractseg_output --nr_fibers 5000
+
+%% Extract metrics for TRactSeg tracts
+cd tractseg_output
+!Tractometry -i TOM_trackings/ -o Tractometry_fa.csv -e endings_segmentations/ -s …/…/fa_ts_MNI.nii.gz
+!Tractometry -i TOM_trackings/ -o Tractometry_peaks.csv -e endings_segmentations/ -s …/my_peaks_flip_x.nii.gz --TOM TOM --peak_length
+!Tractometry -i TOM_trackings/ -o Tractometry_md.csv -e endings_segmentations/ -s …/…/dwi_tensor_md_MNI.nii.gz
+!Tractometry -i TOM_trackings/ -o Tractometry_adc.csv -e endings_segmentations/ -s …/…/dwi_tensor_adc_MNI.nii.gz
+!Tractometry -i TOM_trackings/ -o Tractometry_ad.csv -e endings_segmentations/ -s …/…/dwi_tensor_ad_MNI.nii.gzTractometry -i TOM_trackings/ -o Tractometry_rd.csv -e endings_segmentations/ -s …/…/dwi_tensor_rd_MNI.nii.gz
+!Tractometry -i TOM_trackings/ -o Tractometry_odi.csv -e endings_segmentations/ -s …/…/noddi_wb_odi_MNI.nii.gz
+!Tractometry -i TOM_trackings/ -o Tractometry_odi.csv -e endings_segmentations/ -s …/…/noddi_wb_ficvf_MNI.nii.gz
+!Tractometry -i TOM_trackings/ -o Tractometry_odi.csv -e endings_segmentations/ -s …/…/noddi_wb_fiso_MNI.nii.gz
+
+end
