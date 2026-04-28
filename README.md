@@ -15,11 +15,11 @@ The present study aims to unravel corpus callosum (CC) structural characteristic
 * Both groups showed similar trends of white-matter maturation (increased FA, reduced ODI) associated with increased intellectual functioning.
 * Normative modeling revealed an atypical pattern of callosal development in the VPT group, with reduced maturation over time linked to poorer general intellectual/working memory functioning and lower gestational age.
 
-* ## Repository Structure
+## Repository Structure
 The code in this repository is organized as follows:
 
-* **/Preprocessing**: Contains codes necessary for initial data preparation and processing.
-* **/Analyses**: Contains codes used for the statistical analyses and modeling described in the paper.
+* **Preprocessing**: Contains codes necessary for initial data preparation and processing.
+* **Analyses**: Contains codes used for the statistical analyses and modeling described in the paper.
 
 ---
 
